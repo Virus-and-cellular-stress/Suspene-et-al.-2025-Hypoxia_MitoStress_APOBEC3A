@@ -1,0 +1,1 @@
+This repository provides all code to reproduce the RNA-seq bioinformatics analyses from “Hypoxia-mimicked mitochondrial stress triggers APOBEC3A-mediated DNA damage via non-canonical innate immune activation” (2025), supporting reproducibility and open science. For questions: beibhinn.ohora@pasteur.fr , jean-pierre.vartanian@pasteur.fr
