@@ -7,26 +7,25 @@
 #SBATCH --mem=64G
 #SBATCH --time=72:00:00
 
-##########################################################################################################
-# RNA-seq Data Analysis Workflow: 50-1208954829 GeneWiz (Cardiomyocytes + SARS-COV2 alpha variant)
+# RNA-seq Data Analysis Workflow: GeneWiz (CoCl2 induced hypoxia)
 # Author: Béibhinn O'Hora (2025)
 # Illumina PE 2x150bp
 #
 # Steps:
-#   1. QC 
-#   2. Trimming 
+#   1. Quality Control 
+#   2. Trim reads
 #   3. Reference genome setup (GENCODE / GRCh38)
 #   4. STAR genome index building
-#   5. STAR alignment
-#   6. Read quantification 
-#   7. Merge all count tables
-#   8. Add gene names to final matrix
+#   5. STAR read alignment
+#   6. Read quantification with featureCounts
+#   7. Merge all count tables 
+#   8. Add gene names from gtf to final matrix
 #
-# Modules required:
+# Modules required on Maestro cluster hosted by Institut Pasteur, Paris:
 #   graalvm, fastqc, MultiQC, Trimmomatic, STAR, Subread
-##########################################################################################################
 
-# Note: replace full pathnames based on your preferred area of data storage
+
+# Note: If you would like to use this script you can replace full pathnames based on your preferred area of data storage to the directories listed below e.g. RAW_FASTQ_DIR, FASTQC_DIR, TRIMMED_DIR, etc.
 
 set -e  
 set -x  
@@ -35,7 +34,7 @@ set -x
 # 0. Load modules
 #--------------------------------------------#
 
-# Modules installed on Maestro cluster hosted by Institut Pasteur
+# Modules pre-installed on Maestro cluster hosted by Institut Pasteur, Paris
 module load graalvm
 module load fastqc/0.12.1
 module load MultiQC/1.12
@@ -47,9 +46,12 @@ module load Subread/2.0.6
 # 1. Quality control (FastQC + MultiQC)
 #--------------------------------------------#
 
-RAW_FASTQ_DIR="/path/to/raw_fastq"
-FASTQC_DIR="/path/to/output/00_fastqc"
-MULTIQC_DIR="/path/to/output/01_multiqc"
+# First enter your project space on Zeus where you would like to store your data
+
+# Fill in pathnames
+RAW_FASTQ_DIR="~/path/to/raw_fastq"
+FASTQC_DIR="~/path/to/output/00_fastqc"
+MULTIQC_DIR="~/path/to/output/01_multiqc"
 
 mkdir -p "$FASTQC_DIR" "$MULTIQC_DIR"
 cd "$RAW_FASTQ_DIR"
@@ -61,7 +63,7 @@ multiqc "$FASTQC_DIR" -o "$MULTIQC_DIR"
 # 2. Trimming (Trimmomatic)
 #--------------------------------------------#
 
-TRIMMED_DIR="/path/to/output/02_trimmed"
+TRIMMED_DIR="~/path/to/output/02_trimmed"
 mkdir -p "$TRIMMED_DIR"
 cd "$RAW_FASTQ_DIR"
 
@@ -214,4 +216,3 @@ rm -f "$MERGE_DIR/tmp_body.tsv" "$MERGE_DIR/header.tmp" "$MERGE_DIR/header_final
 FINAL_QC_DIR="/path/to/output/06_final_multiqc"
 mkdir -p "$FINAL_QC_DIR"
 multiqc "$ALIGN_DIR" "$COUNT_DIR" -o "$FINAL_QC_DIR"
-
