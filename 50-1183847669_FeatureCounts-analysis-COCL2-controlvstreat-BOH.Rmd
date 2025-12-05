@@ -1,0 +1,1107 @@
+---
+title: "50-1183847669 CoCl2-treated THP-1 Data Analysis"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+
+# Gene count analysis with DESEQ2 Control vs CoCl2-treated THP-1
+
+## Set up enviroment
+
+```{r}
+library(tidyverse)
+library(DESeq2)
+library(EnhancedVolcano)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(pheatmap)
+library(stringr)
+library(ReactomePA)
+library(matrixStats)
+library(msigdbr)
+library(fgsea)
+library(ggplot2)
+library(dplyr)
+library(writexl)
+library(tibble)
+library(readr)
+```
+
+
+# 1. Load counts matrix and gene symbols
+
+```{r}
+counts <- read_tsv("/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/08_FeatureCounts/CoCl2/featurecounts_counts_with_symbols.tsv")
+counts_df <- as.data.frame(counts)
+head(counts_df)
+```
+
+
+```{r}
+# Removing first five rows as they are not required for analysis
+counts_df <- counts_df[,-(2:6) ]
+head(counts_df)
+```
+
+```{r}
+# rename columns 
+colnames(counts_df) <- c("Geneid", "Control 1", "Control 2", "Control 3", "TreatA1", "TreatA2", "TreatA3", "CoCl2 1", "CoCl2 2", "CoCl2 3", "gene_symbol")
+```
+
+
+```{r}
+# add rownames and keep only samples for comparing control to treated
+rownames(counts_df) <- counts_df$Geneid
+counts_matrix <- counts_df %>% dplyr::select(-c(Geneid, gene_symbol))
+counts_matrix <- counts_matrix[, !colnames(counts_matrix) %in% c("TreatA1", "TreatA2", "TreatA3")]
+head(counts_matrix)
+```
+
+
+# 2. Inspect total gene counts per sample
+
+
+```{r}
+total_counts <- colSums(counts_matrix %>% dplyr::select(where(is.numeric)))
+total_counts_df <- tibble(Sample = names(total_counts), TotalCounts = total_counts)
+ggplot(total_counts_df, aes(x = Sample, y = TotalCounts, fill = Sample)) +
+  geom_bar(stat="identity", color="black") +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle=45, hjust=1)) +
+  labs(title="Raw Gene Counts", y="Total Counts", x="Sample") +
+  scale_fill_brewer(palette="Set1") +
+  guides(fill=FALSE)
+```
+
+
+# 3. Create metadata and DESeq2 object
+
+```{r}
+# Filter lowly expressed genes and keep genes with counts >= 10 in at least 2 samples
+keep <- rowSums(counts_matrix >= 10) >= 2
+counts_matrix <- counts_matrix[keep, ]
+dim(counts_matrix)
+```
+
+26,744 genes
+
+
+```{r}
+# create dds object
+colData <- data.frame(
+  row.names = colnames(counts_matrix),
+  condition = c("control","control","control","treated","treated","treated") 
+)
+
+dds <- DESeqDataSetFromMatrix(countData = counts_matrix,
+                              colData = colData,
+                              design = ~ condition)
+```
+
+
+```{r}
+# Run DESeq2
+dds <- DESeq(dds)
+
+# normalize the counts
+norm_counts <- counts(dds, normalized=TRUE)
+```
+
+```{r}
+normalized_counts <- as.data.frame(norm_counts)
+head(normalized_counts)
+```
+```{r}
+raw_counts <- as.data.frame(counts_matrix)
+head(raw_counts)
+```
+
+
+```{r}
+# export raw counts
+raw_counts <- raw_counts %>%
+  rownames_to_column(var = "GeneID")
+
+colnames(raw_counts) <- gsub(" ", "_", colnames(raw_counts))
+
+write_csv(raw_counts,
+          "/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/out/50-1183847669_CoCl2_THP1_TREAT_VS_CONTROL_raw_gene_counts.csv")
+```
+
+
+```{r}
+# export normalized counts
+normalized_counts <- normalized_counts %>%
+  rownames_to_column(var = "GeneID")
+
+colnames(normalized_counts) <- gsub(" ", "_", colnames(normalized_counts))
+
+write_csv(normalized_counts,
+          "/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/out/50-1183847669_CoCl2_THP1_TREAT_VS_CONTROL_normalized_gene_counts.csv")
+```
+
+
+
+```{r}
+# Visualise normalized counts
+total_norm_counts <- colSums(normalized_counts %>% dplyr::select(where(is.numeric)))
+total_norm_counts_df <- tibble(
+  Sample = names(total_norm_counts),
+  TotalCounts = total_norm_counts
+)
+ggplot(total_norm_counts_df, aes(x = Sample, y = TotalCounts, fill = Sample)) +
+  geom_bar(stat = "identity", color = "black") +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Normalized Gene Counts", y = "Total Normalized Counts", x = "Sample") +
+  scale_fill_brewer(palette = "Set1") +
+  guides(fill = FALSE)
+```
+
+
+
+```{r}
+df_long <- as.data.frame(norm_counts) %>%
+  rownames_to_column("gene") %>%
+  pivot_longer(-gene, names_to="sample", values_to="normalized_count")
+ggplot(df_long, aes(x=sample, y=normalized_count)) +
+  geom_boxplot(fill="lightgreen") +
+  theme_minimal() +
+  xlab("Sample") +
+  ylab("Normalized Counts") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+
+# 4. Principal Component Anlysis
+
+```{r}
+# Run PCA
+vsd <- vst(dds, blind=FALSE)
+plotPCA(vsd, intgroup="condition")
+```
+```{r}
+# Extract PCA data
+pcaData <- plotPCA(vsd, intgroup = "condition", returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color = condition)) +
+  geom_point(size = 4, alpha = 0.8) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_minimal(base_size = 16) +
+  theme(
+    text = element_text(family = "Times New Roman"),  
+    legend.position = "right",
+    panel.grid.major = element_line(color = "gray95"),
+    panel.grid.minor = element_blank()
+  ) +
+  coord_fixed(ratio = 1/0.35)  
+```
+## Top Variable Genes
+
+```{r}
+# vsd is a DESeqTransform object
+vsd_mat <- assay(vsd) 
+topVarGenes <- head(order(rowVars(vsd_mat), decreasing = TRUE), 50)
+vsd_top <- vsd_mat[topVarGenes, ]
+pheatmap(vsd_top, 
+         scale = "row",          
+         annotation_col = as.data.frame(colData(vsd)),
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE)
+
+```
+
+## Add Gene Symbol to replace "EN..." with actual gene name
+
+```{r}
+gene_symbols <- counts_df$gene_symbol[match(rownames(vsd_mat), counts_df$Geneid)]
+rownames(vsd_mat) <- gene_symbols
+topVarGenes <- head(order(rowVars(vsd_mat), decreasing = TRUE), 65)
+vsd_top <- vsd_mat[topVarGenes, ]
+```
+
+
+```{r}
+# Plot heatmap
+pheatmap(vsd_top, 
+         scale = "row",
+         annotation_col = as.data.frame(colData(vsd)),
+         show_rownames = TRUE,
+         show_colnames = TRUE,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         fontsize = 12,         
+         family = "Times New Roman")  
+
+```
+
+
+
+# 5. Differential Gene Expression
+
+
+```{r}
+res <- results(dds, alpha = 0.05) 
+res <- res[!is.na(res$padj), ] # removing any NAs
+res$gene_symbol <- counts_df$gene_symbol[match(rownames(res), counts_df$gene_id)] # adding gene symbol 
+```
+
+```{r}
+# Shrink log2FC 
+resLFC <- lfcShrink(dds, coef=2, type="apeglm") 
+resLFC$gene_symbol <- counts_df$gene_symbol[match(rownames(resLFC), counts_df$gene_id)]
+```
+
+
+```{r}
+# Strip version numbers from rownames + Geneid
+res$Geneid_clean <- sub("\\.\\d+$", "", rownames(res))
+resLFC$Geneid_clean <- sub("\\.\\d+$", "", rownames(resLFC))
+counts_df$Geneid_clean <- sub("\\.\\d+$", "", counts_df$Geneid)
+
+res$gene_symbol <- counts_df$gene_symbol[match(res$Geneid_clean, counts_df$Geneid_clean)]
+resLFC$gene_symbol <- counts_df$gene_symbol[match(resLFC$Geneid_clean, counts_df$Geneid_clean)]
+sum(!is.na(resLFC$gene_symbol)) # check if worked
+```
+
+```{r}
+head(res)
+```
+```{r}
+head(resLFC)
+```
+
+
+
+# 6. Volcano plot with EnhancedVolcano
+
+
+```{r}
+library(EnhancedVolcano)
+
+EnhancedVolcano(resLFC,
+    lab = rep("", nrow(resLFC)),  # give empty strings instead of NULL
+    x = 'log2FoldChange',
+    y = 'padj',
+    pCutoff = 0.05,
+    FCcutoff = 1.5,
+    pointSize = 3.0,
+    labSize = 0,         # ensures no visible labels
+    colAlpha = 0.7,
+    legendLabels = c('NS','Log2FC','padj','padj & Log2FC'),
+    legendPosition = 'right',
+    drawConnectors = FALSE,  # no lines since no labels
+    title = 'Control vs. CoCl2-treated',
+    subtitle = 'Volcano plot of differentially expressed genes',
+    xlim = c(-10, 10),
+    caption = NULL) +
+  theme(
+    text = element_text(family = "Times New Roman")  # Times New Roman
+  )
+
+```
+
+```{r}
+# Getting the number of significantly up and down regulated genes with LFC > 1.5
+padj_cutoff <- 0.05
+lfc_cutoff  <- 1.5
+
+# Upregulated genes
+up_count <- sum(resLFC$padj < padj_cutoff & resLFC$log2FoldChange >  lfc_cutoff, na.rm = TRUE)
+cat("Upregulated genes:", up_count, "\n")
+
+# Downregulated genes
+down_count <- sum(resLFC$padj < padj_cutoff & resLFC$log2FoldChange < -lfc_cutoff, na.rm = TRUE)
+cat("Downregulated genes:", down_count, "\n")
+```
+
+
+
+```{r}
+# labeling top up and down regulated genes
+top_up <- resLFC %>%
+  as.data.frame() %>%
+  filter(!is.na(gene_symbol) & log2FoldChange > 0) %>%
+  arrange(padj) %>%
+  head(500) %>% # can change the number here depending on how many genes you want to visualize
+  pull(gene_symbol)
+
+top_down <- resLFC %>%
+  as.data.frame() %>%
+  filter(!is.na(gene_symbol) & log2FoldChange < 0) %>%
+  arrange(padj) %>%
+  head(500) %>%
+  pull(gene_symbol)
+
+genes_to_label <- c(top_up, top_down)
+
+EnhancedVolcano(resLFC,
+                lab = resLFC$gene_symbol,
+                x = 'log2FoldChange',
+                y = 'padj',
+                selectLab = genes_to_label,  
+                pCutoff = 0.05,
+                FCcutoff = 1.5,
+                pointSize = 3.0,
+                labSize = 4.0,
+                colAlpha = 0.7,
+                legendLabels=c('NS','Log2FC','padj','padj & Log2FC'),
+                legendPosition = 'right',
+                drawConnectors = TRUE,
+                widthConnectors = 0.5,
+                colConnectors = 'grey30',
+                title = 'Treated vs Control',
+                subtitle = 'Volcano plot of DE genes',
+                xlim = c(-10, 10))
+```
+
+
+
+# 7. Gene Ontology enrichment with clusterProfiler
+
+```{r}
+# Subset all the significant genes (up and downregulated) (adjusted p-value < 0.05)
+sig_genes <- unique(resLFC$gene_symbol[!is.na(resLFC$padj) & resLFC$padj < 0.05])
+
+# Map the subsetted genes to Entrez IDs
+gene_df <- bitr(sig_genes, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")
+entrez_ids <- gene_df$ENTREZID
+
+# GO enrichment analysis (Biological Process)
+ego <- enrichGO(gene         = entrez_ids,
+                OrgDb        = org.Hs.eg.db,
+                ont          = "BP",
+                pAdjustMethod = "BH",
+                qvalueCutoff  = 0.05,
+                readable      = TRUE)
+ego_df <- as.data.frame(ego)
+
+# Sort by adjusted p-value first, then by Count (descending)
+ego_top <- ego_df %>%
+  arrange(p.adjust, desc(Count)) %>%
+  head(20)  # can change if you want to see more or less terms
+
+# Dotplot of results
+ggplot(ego_top, aes(x = reorder(Description, -Count), y = Count, 
+                    color = -log10(p.adjust), size = Count)) +
+  geom_point() +
+  coord_flip() +
+  scale_color_gradient(low = "lightblue", high = "darkblue") +
+  labs(title = "Top GO Biological Processes",
+       x = "GO Term",
+       y = "Gene Count",
+       color = "-log10(adj. p-value)",
+       size = "Gene Count") +                                                                 
+  theme_minimal(base_size = 14)
+```
+
+
+```{r}
+# Dotplot visualisation
+ego_top$Description <- str_wrap(ego_top$Description, width = 120)
+ggplot(ego_top, aes(x = reorder(Description, Count), y = Count, 
+                    color = -log10(p.adjust), size = Count)) +
+  geom_point() +
+  coord_flip() +
+  scale_color_gradient(low = "palegreen", high = "darkgreen") +
+  labs(
+    title = "Top GO Biological Processes",
+    x = "",
+    y = "Gene Count",
+    color = "-log10(adj. p-value)",
+    size = "Gene Count"
+  ) +
+  theme_minimal(base_size = 14, base_family = "Times New Roman") +
+  theme(
+    plot.title   = element_text(hjust = 0.5, size = 22, face = "bold", color = "black"),
+    axis.text.x  = element_text(size = 15, color = "black"),
+    axis.text.y  = element_text(size = 13, color = "black", hjust = 1),  # adjust horizontal justification
+    axis.title.x = element_text(size = 13, color = "black", face = "bold"),
+    axis.title.y = element_text(size = 13, color = "black", face = "bold"),
+    legend.title = element_text(size = 15, color = "black"),
+    legend.text  = element_text(size = 12, color = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", size = 0.5)
+  )
+```
+
+```{r}
+# Boxplot visualisation
+ego_top$Description <- str_wrap(ego_top$Description, width = 100)  
+
+ggplot(ego_top, aes(x = reorder(Description, Count), y = Count)) +
+  geom_col(fill = "darkgreen", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Top GO Biological Processes",
+    x = "",
+    y = "Gene Count"
+  ) +
+  theme_minimal(base_size = 14, base_family = "Times New Roman") +
+  theme(
+    plot.title   = element_text(hjust = 0.5, size = 22, face = "bold", color = "black"),
+    axis.text.x  = element_text(size = 15, color = "black"),
+    axis.text.y  = element_text(size = 13, color = "black", hjust = 1),  # left-align long labels
+    axis.title.x = element_text(size = 13, color = "black", face = "bold"),
+    axis.title.y = element_text(size = 13, color = "black", face = "bold"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", size = 0.5)
+  )
+
+```
+
+
+
+
+## Splitting by up or downregulated genes
+
+```{r}
+up_genes <- resLFC$gene_symbol[resLFC$padj < 0.05 & resLFC$log2FoldChange > 0]
+down_genes <- resLFC$gene_symbol[resLFC$padj < 0.05 & resLFC$log2FoldChange < 0]
+
+# Map to Entrez IDs
+up_entrez <- bitr(up_genes, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")$ENTREZID
+down_entrez <- bitr(down_genes, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Hs.eg.db")$ENTREZID
+
+# run analysis on up and down genes
+ego_up <- enrichGO(
+  gene = up_entrez,
+  OrgDb = org.Hs.eg.db,
+  ont = "BP",
+  pAdjustMethod = "BH",
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+
+ego_down <- enrichGO(
+  gene = down_entrez,
+  OrgDb = org.Hs.eg.db,
+  ont = "BP",
+  pAdjustMethod = "BH",
+  qvalueCutoff = 0.05,
+  readable = TRUE
+)
+```
+
+
+
+```{r}
+plot_go_direction <- function(enrich_result, title, color = "red", n = 20, wrap_width = 100) {
+  
+  df <- as.data.frame(enrich_result) %>%
+    filter(Count > 50) %>%          
+    arrange(p.adjust, desc(Count)) %>%
+    head(n)
+  
+  df$Description <- stringr::str_wrap(df$Description, width = wrap_width)
+  
+  ggplot(df, aes(x = reorder(Description, Count), y = Count)) +
+    geom_point(aes(color = -log10(p.adjust), size = Count), alpha = 0.8) +
+    coord_flip() +
+    scale_color_gradient(low = "lightgray", high = color) +
+    labs(
+      title = title,
+      x = "",
+      y = "Gene Count",
+      color = "-log10(adj. p-value)",
+      size = "Gene Count"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      text = element_text(family = "Times New Roman"),
+      axis.title = element_text(face = "bold", size = 14, color = "black"),
+      axis.text.y = element_text(size = 12, color = "black", hjust = 1),  # moderate wrapping
+      axis.text.x = element_text(size = 12, color = "black"),
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5, color = "black"),
+      legend.title = element_text(face = "bold", color = "black"),
+      legend.text = element_text(color = "black"),
+      panel.grid = element_blank(),
+      axis.line = element_line(color = "black", size = 0.5)
+    )
+}
+```
+
+```{r}
+plot_go_direction(ego_up, title = "Top GO BP (Upregulated)", color = "red")
+plot_go_direction(ego_down, title = "Top GO BP (Downregulated)", color = "blue")
+```
+
+
+# KEGG enrichment
+
+
+```{r}
+kegg_up   <- enrichKEGG(gene = up_ids, organism = "hsa")
+kegg_down <- enrichKEGG(gene = down_ids, organism = "hsa")
+
+```
+
+```{r}
+plot_top_terms <- function(enrich_result, title, n=20) {
+  df <- as.data.frame(enrich_result) %>%
+    arrange(p.adjust, desc(Count)) %>%
+    head(n)
+  
+  ggplot(df, aes(x = reorder(Description, Count), 
+                 y = Count,
+                 color = -log10(p.adjust),
+                 size = Count)) +
+    geom_point(alpha = 0.9) +
+    coord_flip() +
+    scale_color_gradient(low = "blue", high = "red") +
+    labs(title = title,
+         x = "GO Term",
+         y = "Gene Count",
+         color = expression(-log[10]~"(adj. p-value)"),
+         size = "Gene Count") +
+    theme_minimal(base_size = 14, base_family = "Times New Roman") +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+      axis.text.y = element_text(size = 12),
+      axis.text.x = element_text(size = 12),
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size = 11),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor = element_blank()
+    )
+}
+```
+
+```{r}
+plot_top_terms(kegg_up,   "Upregulated Genes - KEGG Pathways")
+plot_top_terms(kegg_down, "Downregulated Genes - KEGG Pathways")
+```
+```{r}
+# 5. Reactome Pathway Enrichment
+react_up   <- enrichPathway(gene = up_ids, organism = "human", readable=TRUE)
+react_down <- enrichPathway(gene = down_ids, organism = "human", readable=TRUE)
+```
+
+
+```{r}
+plot_top_terms(react_up,   "Upregulated Genes - Reactome Pathways")
+plot_top_terms(react_down, "Downregulated Genes - Reactome Pathways")
+```
+
+
+
+# 9. Gene enrichment analysis with GSEA
+
+```{r}
+library(fgsea)
+library(msigdbr)
+
+# prepare DESeqResults
+res_df <- as.data.frame(resLFC)
+res_df <- res_df[!is.na(res_df$gene_symbol) & is.finite(res_df$log2FoldChange), ] # Keep only rows with valid gene symbols and finite log2FoldChange
+res_df <- res_df[!duplicated(res_df$gene_symbol), ] # Keep only one entry per gene symbol
+
+# Make a ranked gene vector
+ranked_genes <- res_df$log2FoldChange
+names(ranked_genes) <- res_df$gene_symbol
+stopifnot(all(is.finite(ranked_genes)))
+
+# Load Hallmark gene sets
+m_df <- msigdbr(species = "Homo sapiens", category = "H")
+pathways <- split(x = m_df$gene_symbol, f = m_df$gs_name)
+
+# Run FGSEA
+fgseaRes <- fgsea(
+  pathways = pathways,
+  stats = ranked_genes,
+  minSize = 15,
+  maxSize = 500#,
+  #nperm = 10000
+)
+
+# Top pathways
+topPathways <- fgseaRes %>% arrange(padj) %>% head(20)
+topPathways
+
+```
+
+```{r}
+ggplot(topPathways, aes(x = reorder(pathway, NES), y = NES, fill = NES)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(
+    title = "Top Enriched Hallmark Pathways",
+    x = "Pathway",
+    y = "Normalized Enrichment Score (NES)",
+    fill = "NES"
+  ) +
+  theme_minimal(base_size = 14, base_family = "Times New Roman") +
+  theme(
+    plot.title   = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.text.x  = element_text(size = 12),
+    axis.text.y  = element_text(size = 12),
+    axis.title.x = element_text(size = 13),
+    axis.title.y = element_text(size = 13),
+    legend.title = element_text(size = 12),
+    legend.text  = element_text(size = 11)
+  )
+```
+
+
+
+```{r}
+# Filter pathways to highlight the key pathways we are interested in related to hypoxia, immune response, dna damage, mitochondria and metabolism
+exclude <- c("HALLMARK_MYOGENESIS", "HALLMARK_ADIPOGENSIS", "HALLMARK_ESTROGEN_RESPONSE_LATE", "HALLMARK_HEME_METABOLISM", "HALLMARK_XENOBIOTIC_METABOLISM",
+             "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION", "HALLMARK_ADIPOGENESIS", "HALLMARK_ESTROGEN_RESPONSE_EARLY", "HALLMARK_MYC_TARGETS_V2", "HALLMARK_MYC_TARGETS_V1",
+             "HALLMARK_E2F_TARGETS", "HALLMARK_APICAL_JUNCTION", "HALLMARK_FATTY_ACID_METABOLISM")
+
+topPathways_filtered <- topPathways %>%
+  filter(!pathway %in% exclude)
+
+ggplot(topPathways_filtered, aes(x = reorder(pathway, NES), y = NES, fill = NES)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(
+    title = "Top Enriched Hallmark Pathways",
+    x = "Pathway",
+    y = "Normalized Enrichment Score (NES)",
+    fill = "NES"
+  ) +
+  theme_minimal(base_size = 14, base_family = "Times New Roman")
+
+```
+
+
+```{r}
+# Plot top pathways NES 
+ggplot(topPathways_filtered, aes(x = reorder(pathway, NES), y = NES, fill = NES)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(
+    title = "Top Enriched Hallmark Pathways",
+    x = "Pathway",
+    y = "Normalized Enrichment Score (NES)",
+    fill = "NES"
+  ) +
+theme_minimal(base_size = 20, base_family = "Times New Roman") +
+theme(
+  plot.title   = element_text(hjust = 0.5, size = 16, face = "bold"),
+  axis.text.x  = element_text(size = 20),
+  axis.text.y  = element_text(size = 12),
+  axis.title.x = element_text(size = 13),
+  axis.title.y = element_text(size = 13),
+  legend.title = element_text(size = 12),
+  legend.text  = element_text(size = 11),
+  panel.grid.major = element_blank(),  
+  panel.grid.minor = element_blank()   
+)
+```
+
+```{r}
+topPathways_filtered$pathway_label <- topPathways_filtered$pathway %>%
+  str_replace_all("_", " ") %>% 
+  str_to_title()                
+
+ggplot(topPathways_filtered, aes(x = reorder(pathway_label, NES), y = NES, fill = NES)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(
+    title = "Top Enriched Hallmark Pathways",
+    x = "Pathway",
+    y = "Normalized Enrichment Score (NES)",
+    fill = "NES"
+  ) +
+theme_minimal(base_size = 20, base_family = "Times New Roman") +
+theme(
+  plot.title   = element_text(hjust = 0.5, size = 16, face = "bold"),
+  axis.text.x  = element_text(size = 20),
+  axis.text.y  = element_text(size = 12),
+  axis.title.x = element_text(size = 13),
+  axis.title.y = element_text(size = 13),
+  legend.title = element_text(size = 12),
+  legend.text  = element_text(size = 11),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank()
+)
+
+```
+
+
+```{r}
+library(stringr)
+
+topPathways_filtered$pathway_label <- topPathways_filtered$pathway %>%
+  str_replace_all("_", " ") %>%           # replace underscores with spaces
+  str_to_lower() %>%                      # lowercase everything
+  str_replace("^hallmark", "Hallmark")    # capitalize "Hallmark" at start
+
+ggplot(topPathways_filtered, aes(x = reorder(pathway_label, NES), y = NES, fill = NES)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(
+    title = "Enriched GSEA Hallmark Pathways",
+    x = "",
+    y = "Normalized Enrichment Score (NES)",
+    fill = "NES"
+  ) +
+theme_minimal(base_size = 20, base_family = "Times New Roman") +
+theme(
+  plot.title   = element_text(hjust = 0.5, size = 22, face = "bold", color = "black"),
+  axis.text.x  = element_text(size = 15, color = "black"),
+  axis.text.y  = element_text(size = 15, color = "black"),
+  axis.title.x = element_text(size = 13, color = "black", face = "bold"),  
+  axis.title.y = element_text(size = 13, color = "black", face = "bold"),  
+  legend.title = element_text(size = 15, color = "black"),
+  legend.text  = element_text(size = 12, color = "black"),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  axis.line = element_line(color = "black", size = 0.5)
+)
+
+
+```
+
+
+
+# 10. Extract hallmark genes
+
+```{r}
+# fgseaResult already has a column "leadingEdge" that contains gene symbols contributing to the NES
+fgsea_gene_list <- fgseaRes[, c("pathway", "NES", "leadingEdge")]
+
+# check if i can access this
+fgsea_gene_list$leadingEdge[[1]]
+```
+
+
+```{r}
+# all pathways
+fgsea_gene_list[[1]]
+```
+
+
+```{r}
+# hallmark hypoxia
+fgsea_gene_list$leadingEdge[[22]]
+```
+
+
+
+```{r}
+library(EnhancedVolcano)
+
+hallmark_hypoxia_genes <- c(
+  "HMOX1", "ADM", "STC1", "ENO2", "STC2", "DDIT4", "LDHC", "CDKN1A", "MT2A", "NDRG1",
+  "BNIP3L", "ISG20", "SLC2A3", "PGF", "TMEM45A", "CA12", "PDK1", "BHLHE40", "P4HA1",
+  "ALDOC", "GBE1", "MAFF", "KDM3A", "SLC6A6", "EFNA3", "GCNT2", "P4HA2", "KLHL24",
+  "ATF3", "BCAN", "ALDOA", "VEGFA", "PLIN2", "PIM1", "HK2", "ANKZF1", "TPST2", "PPP1R3C",
+  "GLRX", "ERRFI1", "CCNG2", "ZNF292", "PPP1R15A", "GPI", "CDKN1C", "TES", "PYGM",
+  "F3", "NFIL3", "NEDD4L", "ERO1A", "ANXA2", "ATP7A", "PNRC1", "SLC2A1", "NDST1",
+  "LDHA", "KIF5A", "SERPINE1", "JMJD6", "IDS", "FOXO3", "JUN", "IER3", "GAPDH",
+  "HEXA", "PPARGC1A", "PFKP", "DPYSL4", "EXT1", "AMPD3", "CP", "PLAUR", "PGM1",
+  "AKAP12", "CAVIN1", "SDC4", "TIPARP", "PGK1"
+)
+
+
+# Volcano plot labeling only pathway genes
+EnhancedVolcano(resLFC,
+                lab = resLFC$gene_symbol,
+                x = 'log2FoldChange',
+                y = 'padj',
+                selectLab = hallmark_hypoxia_genes, 
+                pCutoff = 0.05,
+                FCcutoff = 1,
+                pointSize = 3.0,
+                labSize = 4.0,
+                colAlpha = 0.7,
+                legendLabels=c('NS','Log2FC','padj','padj & Log2FC'),
+                legendPosition = 'right',
+                drawConnectors = TRUE,
+                widthConnectors = 0.5,
+                colConnectors = 'grey30',
+                title = 'Treated vs Control',
+                subtitle = 'Volcano plot of DE genes',
+                xlim = c(-10, 10))
+
+```
+
+
+
+```{r}
+## Hypoxia genes - improving the visualisation
+
+# Extract hypoxia pathway genes
+hypoxia_genes <- unique(unlist(pathways["HALLMARK_HYPOXIA"]))
+
+# Filter DESeq results for hypoxia genes with |log2FC| ≥ 1.5
+highlight_genes <- subset(
+  resLFC,
+  gene_symbol %in% hypoxia_genes & abs(log2FoldChange) >= 1.5
+)
+```
+
+
+```{r}
+ggplot(resLFC, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(color = "grey", alpha = 0.7) +
+
+  geom_point(data = highlight_genes,
+             aes(x = log2FoldChange, y = -log10(padj)),
+             color = "darkgreen", size = 3) +
+  ggrepel::geom_text_repel(
+    data = highlight_genes,
+    aes(x = log2FoldChange, y = -log10(padj), label = gene_symbol),
+    color = "darkgreen",
+    size = 5,                  
+    fontface = "bold",
+    family = "Times New Roman",
+    segment.color = "darkgreen",
+    segment.size = 0.5,
+    box.padding = 0.5,
+    point.padding = 0.5,
+    max.overlaps = Inf
+  ) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "black") +
+  theme_minimal(base_size = 16, base_family = "Times New Roman") +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    plot.title   = element_text(hjust = 0.5, size = 25, face = "bold", color = "black"),
+    axis.text.x  = element_text(size = 20, color = "black"),
+    axis.text.y  = element_text(size = 20, color = "black"),
+    axis.title.x = element_text(size = 22, color = "black", face = "bold"),
+    axis.title.y = element_text(size = 22, color = "black", face = "bold"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", size = 0.5),
+    legend.position = "none"
+  ) +
+  labs(
+    title = "Hypoxia Hallmark Pathway Genes",
+    x = "log2(Fold Change)",
+    y = "-log10(adjusted p-value)"
+  )
+```
+
+
+
+
+```{r}
+## Mitochondria / Metabolism genes
+
+# Define metabolism-related pathways
+metabolism_paths <- c(
+  "HALLMARK_OXIDATIVE_PHOSPHORYLATION",
+  "HALLMARK_GLYCOLYSIS",
+  "HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY"
+)
+
+# Extract member genes
+metabolism_genes <- unique(unlist(pathways[metabolism_paths]))
+
+# Filter DESeq results for metabolism genes with |log2FC| ≥ 1.5
+highlight_genes <- subset(
+  resLFC,
+  gene_symbol %in% metabolism_genes & abs(log2FoldChange) >= 1.5
+)
+```
+
+
+```{r}
+ggplot(resLFC, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(color = "grey", alpha = 0.7) +
+  geom_point(data = highlight_genes,
+             aes(x = log2FoldChange, y = -log10(padj)),
+             color = "darkblue", size = 3) +
+  ggrepel::geom_text_repel(
+    data = highlight_genes,
+    aes(x = log2FoldChange, y = -log10(padj), label = gene_symbol),
+    color = "darkblue",
+    size = 6,                 
+    fontface = "bold",
+    family = "Times New Roman",
+    segment.color = NA,
+    box.padding = 0.5,
+    point.padding = 0.5,
+    max.overlaps = Inf
+  ) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "black") +
+  theme_minimal(base_size = 16, base_family = "Times New Roman") +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    plot.title   = element_text(hjust = 0.5, size = 25, face = "bold", color = "black"),
+    axis.text.x  = element_text(size = 20, color = "black"),
+    axis.text.y  = element_text(size = 20, color = "black"),
+    axis.title.x = element_text(size = 22, color = "black", face = "bold"),
+    axis.title.y = element_text(size = 22, color = "black", face = "bold"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", size = 0.5),
+    legend.position = "none"
+  ) +
+  labs(
+    title = "Mitochondrial and Metabolism Hallmark Pathway Genes",
+    x = "log2(Fold Change)",
+    y = "-log10(adjusted p-value)"
+  )
+```
+
+```{r}
+## DNA Repair genes
+
+# Define DNA repair pathway
+dna_repair_path <- c("HALLMARK_DNA_REPAIR", "HALLMARK_P53_PATHWAY") 
+
+# Extract member genes
+dna_repair_genes <- unique(unlist(pathways[dna_repair_path]))
+
+# Filter DESeq results for DNA repair genes with |log2FC| ≥ 1.5
+highlight_genes <- subset(
+  resLFC,
+  gene_symbol %in% dna_repair_genes & abs(log2FoldChange) >= 1.5
+)
+```
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+
+ggplot(resLFC, aes(x = log2FoldChange, y = -log10(padj))) +
+  # All genes grey
+  geom_point(color = "grey", alpha = 0.7) +
+  # Highlight DNA repair genes in purple
+  geom_point(data = highlight_genes,
+             aes(x = log2FoldChange, y = -log10(padj)),
+             color = "purple", size = 3) +
+  # Label highlighted DNA repair genes
+  ggrepel::geom_text_repel(
+    data = highlight_genes,
+    aes(x = log2FoldChange, y = -log10(padj), label = gene_symbol),
+    color = "purple",
+    size = 6,                 # increased label size
+    fontface = "bold",
+    family = "Times New Roman",
+    segment.color = NA,
+    box.padding = 0.5,
+    point.padding = 0.5,
+    max.overlaps = Inf
+  ) +
+  # Horizontal significance cutoff line
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+  # Vertical fold-change cutoff lines at ±1.5
+  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "black") +
+  theme_minimal(base_size = 16, base_family = "Times New Roman") +
+  theme(
+    text = element_text(family = "Times New Roman"),
+    plot.title   = element_text(hjust = 0.5, size = 28, face = "bold", color = "black"),
+    axis.text.x  = element_text(size = 20, color = "black"),  # bigger x-axis labels
+    axis.text.y  = element_text(size = 20, color = "black"),  # bigger y-axis labels
+    axis.title.x = element_text(size = 22, color = "black", face = "bold"),  # bigger x-axis title
+    axis.title.y = element_text(size = 22, color = "black", face = "bold"),  # bigger y-axis title
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", size = 0.5),
+    legend.position = "none"
+  ) +
+  labs(
+    title = "DNA Repair and p53 Hallmark Pathway Genes",
+    x = "log2(Fold Change)",
+    y = "-log10(adjusted p-value)"
+  )
+
+```
+
+
+
+## Innate immune genes
+
+
+```{r}
+# Define innate immunity / inflammation pathways
+innate_immunity_paths <- c(
+  "HALLMARK_INFLAMMATORY_RESPONSE",
+  "HALLMARK_INTERFERON_ALPHA_RESPONSE",
+  "HALLMARK_INTERFERON_GAMMA_RESPONSE",
+  "HALLMARK_IL2_STAT5_SIGNALING",
+  "HALLMARK_IL6_JAK_STAT3_SIGNALING",
+  "HALLMARK_TNFA_SIGNALING_VIA_NFKB"
+)
+
+# Loop through each pathway to create individual volcano plots
+for (pathway in innate_immunity_paths) {
+  
+  pathway_genes <- unique(unlist(pathways[pathway]))
+  
+  highlight_genes <- subset(
+    resLFC,
+    gene_symbol %in% pathway_genes & abs(log2FoldChange) >= 1.5
+  )
+  
+  # Create volcano plot
+  p <- ggplot(resLFC, aes(x = log2FoldChange, y = -log10(padj))) +
+    geom_point(color = "grey", alpha = 0.7) +
+    geom_point(data = highlight_genes,
+               aes(x = log2FoldChange, y = -log10(padj)),
+               color = "darkblue", size = 3) +
+    # Label highlighted genes
+    ggrepel::geom_text_repel(
+      data = highlight_genes,
+      aes(x = log2FoldChange, y = -log10(padj), label = gene_symbol),
+      color = "darkblue",
+      size = 5,
+      fontface = "bold",
+      family = "Times New Roman",
+      segment.color = NA,
+      box.padding = 0.5,
+      point.padding = 0.5,
+      max.overlaps = Inf
+    ) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+    theme_minimal(base_size = 14, base_family = "Times New Roman") +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 18, face = "bold"),
+      axis.title = element_text(size = 16),
+      axis.text = element_text(size = 14),
+      panel.grid = element_blank()
+    ) +
+    labs(
+      title = paste0(pathway, " pathway genes (|log2FC| ≥ 1.5)"),
+      x = "log2(Fold Change)",
+      y = "-log10(adjusted p-value)"
+    )
+  
+  print(p)
+}
+
+```
+
+
+
+# Save results
+
+```{r}
+library(writexl)
+
+# Save all DEGs with gene symbols
+write_xlsx(as.data.frame(resLFC), path = "/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/out/DEGs_results_Control_vs_Treat2.xlsx")
+
+# Save only significant DEGs (padj < 0.05)
+sig_res <- resLFC[resLFC$padj < 0.05 & !is.na(resLFC$padj), ]
+write_xlsx(as.data.frame(sig_res), path = "/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/out/DEGs_results_Control_vs_Treat2_significant.xlsx")
+```
+
+
+
