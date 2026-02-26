@@ -35,7 +35,7 @@ library(readr)
 # 1. Load counts matrix and gene symbols
 
 ```{r}
-counts <- read_tsv("/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/08_FeatureCounts/CoCl2/featurecounts_counts_with_symbols.tsv")
+counts <- read_tsv("/path_to_input/featurecounts_counts_with_symbols.tsv")
 counts_df <- as.data.frame(counts)
 head(counts_df)
 ```
@@ -129,7 +129,7 @@ raw_counts <- raw_counts %>%
 colnames(raw_counts) <- gsub(" ", "_", colnames(raw_counts))
 
 write_csv(raw_counts,
-          "/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/out/50-1183847669_CoCl2_THP1_TREAT_VS_CONTROL_raw_gene_counts.csv")
+          "/path_to_output/50-1183847669_CoCl2_THP1_TREAT_VS_CONTROL_raw_gene_counts.csv")
 ```
 
 
@@ -141,7 +141,7 @@ normalized_counts <- normalized_counts %>%
 colnames(normalized_counts) <- gsub(" ", "_", colnames(normalized_counts))
 
 write_csv(normalized_counts,
-          "/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/out/50-1183847669_CoCl2_THP1_TREAT_VS_CONTROL_normalized_gene_counts.csv")
+          "/path_to_output/50-1183847669_CoCl2_THP1_TREAT_VS_CONTROL_normalized_gene_counts.csv")
 ```
 
 
@@ -1096,11 +1096,11 @@ for (pathway in innate_immunity_paths) {
 library(writexl)
 
 # Save all DEGs with gene symbols
-write_xlsx(as.data.frame(resLFC), path = "/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/out/DEGs_results_Control_vs_Treat2.xlsx")
+write_xlsx(as.data.frame(resLFC), path = "/path_to_output/DEGs_results_Control_vs_Treat2.xlsx")
 
 # Save only significant DEGs (padj < 0.05)
 sig_res <- resLFC[resLFC$padj < 0.05 & !is.na(resLFC$padj), ]
-write_xlsx(as.data.frame(sig_res), path = "/Volumes/projects/RNAseq-VIRO/GeneWiz/50-1183847669/BOHORA_analysis/out/DEGs_results_Control_vs_Treat2_significant.xlsx")
+write_xlsx(as.data.frame(sig_res), path = "/path_to_output/DEGs_results_Control_vs_Treat2_significant.xlsx")
 ```
 
 
